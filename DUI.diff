@@ -1,0 +1,2152 @@
+diff -r 23b2122ef9da indra/llcommon/nd/ndboolswitch.h
+--- a/indra/llcommon/nd/ndboolswitch.h	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llcommon/nd/ndboolswitch.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -29,13 +29,13 @@
+ {
+ 	namespace utils
+ 	{
+-		class boolSwitch
++		template<typename T> class varSwitch
+ 		{
+-			bool *mLocation;
+-			bool mOriginalValue;
++			T *mLocation;
++			T mOriginalValue;
+ 			bool mNeedsReset;
+ 		public:
+-			boolSwitch( bool *aLocation, bool aValue )
++			varSwitch( T *aLocation, T aValue )
+ 				: mLocation( aLocation )
+ 				, mNeedsReset( false )
+ 			{
+@@ -47,9 +47,14 @@
+ 				}
+ 			}
+ 
+-			~boolSwitch( )
++			~varSwitch( )
+ 			{
+-				reset();
++				this->reset();
++			}
++
++			T getOriginalValue() const
++			{
++				return mOriginalValue;
+ 			}
+ 
+ 			void reset()
+@@ -59,8 +64,9 @@
+ 
+ 				mNeedsReset = false;
+ 			}
++		};
+ 
+-		};
++		typedef varSwitch< bool > boolSwitch;
+ 	}
+ }
+ 
+diff -r 23b2122ef9da indra/llui/CMakeLists.txt
+--- a/indra/llui/CMakeLists.txt	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llui/CMakeLists.txt	Thu Mar 27 21:17:07 2014 +0100
+@@ -255,6 +255,18 @@
+     llxuiparser.h
+     )
+ 
++# <FS:ND> Add all nd* files.
++
++FILE( GLOB llui_ND_SOURCE_FILES nd/nd*.cpp )
++FILE( GLOB llui_ND_HEADER_FILES nd/nd*.h )
++
++SOURCE_GROUP( nd FILES ${llui_ND_SOURCE_FILES} ${llui_ND_HEADER_FILES} )
++
++list(APPEND llui_SOURCE_FILES  ${llui_ND_SOURCE_FILES} )
++list(APPEND llui_HEADER_FILES ${llui_ND_HEADER_FILES} )
++
++# </FS:ND>
++
+ set_source_files_properties(${llui_HEADER_FILES}
+                             PROPERTIES HEADER_FILE_ONLY TRUE)
+ 
+diff -r 23b2122ef9da indra/llui/lldraghandle.cpp
+--- a/indra/llui/lldraghandle.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llui/lldraghandle.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -359,6 +359,8 @@
+ 		mLastMouseScreenX = screen_x;
+ 		mLastMouseScreenY = screen_y;
+ 
++		// <FS:ND> if nd::uiutils::isFreeFloater( getParent() ) returns true, really dock? Or what to do then?
++
+ 		LLView* snap_view = getParent()->findSnapRect(new_rect, mouse_dir, SNAP_PARENT_AND_SIBLINGS, sSnapMargin);
+ 
+ 		getParent()->setSnappedTo(snap_view);
+diff -r 23b2122ef9da indra/llui/llfloater.cpp
+--- a/indra/llui/llfloater.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llui/llfloater.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -60,6 +60,7 @@
+ #include "llsdutil.h"
+ #include <boost/foreach.hpp>
+ 
++#include "nd/nduiutils.h"
+ 
+ // use this to control "jumping" behavior when Ctrl-Tabbing
+ const S32 TABBED_FLOATER_OFFSET = 0;
+@@ -616,6 +617,8 @@
+ 	//           if nothing has changed?
+ 	if (visible == LLPanel::getVisible()) return;
+ 
++	nd::ui::Floater::showWindow( visible );
++
+ 	LLPanel::setVisible(visible); // calls handleVisibilityChange()
+ 	if( visible && mFirstLook )
+ 	{
+@@ -1201,6 +1204,8 @@
+ 	const LLRect old_rect = getRect();
+ 	LLView::handleReshape(new_rect, by_user);
+ 
++	nd::ui::Floater::moveWindowGL( new_rect.mLeft, new_rect.mTop, new_rect.getWidth(), new_rect.getHeight() );
++
+ 	if (by_user && !getHost())
+ 	{
+ 		static_cast<LLFloaterView*>(getParent())->adjustToFitScreen(this, !isMinimized());
+@@ -1907,6 +1912,7 @@
+ // virtual
+ void LLFloater::draw()
+ {
++	nd::ui::Floater::ContextSetter oCtx( this );
+ 	const F32 alpha = getCurrentTransparency();
+ 
+ 	// draw background
+@@ -2342,6 +2348,10 @@
+ 	for ( child_list_const_iter_t child_it = getChildList()->begin(); child_it != getChildList()->end(); ++child_it)
+ 	{
+ 		LLView* viewp = *child_it;
++
++		if( nd::uiutils::isFreeFloater( viewp ) )
++			continue;
++
+ 		LLFloater* floaterp = (LLFloater*)viewp;
+ 		if (floaterp->isDependent())
+ 		{
+@@ -3733,3 +3743,20 @@
+ 		self.mY = rescale(from_y, snap_rect.mBottom, snap_rect.mTop - floater_height, -0.5f, 0.5f);
+ 	}
+ }
++
++// <FS:ND> Specilisation for Floaters that can be outside of the main window.
++void LLFloater::translate( S32 x, S32 y )
++{
++	LLView::translate( x, y );
++	nd::ui::Floater::moveWindow( getRect().mLeft, getRect().mBottom, getRect().getWidth(), getRect().getHeight() );
++}
++
++void LLFloater::getRectForContext( S32 &aX, S32 &aY, S32 &aWidth, S32 &aHeight )
++{
++	LLRect oR = this->getRect();
++	aX = getRect().mLeft;
++	aY = getRect().mTop;
++	aWidth = getRect().mRight-getRect().mLeft;
++	aHeight = getRect().mBottom-getRect().mTop;
++}
++// </FS:ND>
+diff -r 23b2122ef9da indra/llui/llfloater.h
+--- a/indra/llui/llfloater.h	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llui/llfloater.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -38,6 +38,9 @@
+ #include <set>
+ #include <boost/signals2.hpp>
+ 
++
++#include "nd/ndfloater.h"
++
+ class LLDragHandle;
+ class LLResizeHandle;
+ class LLResizeBar;
+@@ -117,7 +120,8 @@
+ 	
+ };
+ 
+-class LLFloater : public LLPanel, public LLInstanceTracker<LLFloater>
++// class LLFloater : public LLPanel, public LLInstanceTracker<LLFloater>
++class LLFloater : public LLPanel, public LLInstanceTracker<LLFloater>, public nd::ui::Floater
+ {
+ 	friend class LLFloaterView;
+ 	friend class LLFloaterReg;
+@@ -512,6 +516,12 @@
+ 	BOOL			mHasBeenDraggedWhileMinimized;
+ 	S32				mPreviousMinimizedBottom;
+ 	S32				mPreviousMinimizedLeft;
++
++public:
++	// <FS:ND> Specilisation for Floaters that can be outside of the main window.
++	virtual void translate( S32 x, S32 y );
++	void getRectForContext( S32 &aX, S32 &aY, S32 &aWidth, S32 &aHeight );
++	// </FS:ND>
+ };
+ 
+ 
+diff -r 23b2122ef9da indra/llui/llmenugl.cpp
+--- a/indra/llui/llmenugl.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llui/llmenugl.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -3049,6 +3049,7 @@
+ 
+ void LLMenuGL::draw( void )
+ {
++	nd::ui::Menu::preDraw(); // <FS:ND/> Let a menu be able to follow a floater outside the main wnd
+ 	if (mNeedsArrange)
+ 	{
+ 		arrange();
+@@ -3067,6 +3068,7 @@
+ 		gl_rect_2d( 0, getRect().getHeight(), getRect().getWidth(), 0, mBackgroundColor.get() );
+ 	}
+ 	LLView::draw();
++	nd::ui::Menu::postDraw(); // <FS:ND/> Let a menu be able to follow a floater outside the main wnd
+ }
+ 
+ void LLMenuGL::drawBackground(LLMenuItemGL* itemp, F32 alpha)
+@@ -3202,7 +3204,17 @@
+ 							rect.getWidth(), rect.getHeight() );
+ 	menu->setRect( rect );
+ 
+-
++	{
++		LLView *pV( spawning_view );
++		nd::ui::Floater *pF(0);
++		while( pV && !pF )
++		{
++			pF = dynamic_cast< nd::ui::Floater* >( pV );
++			pV = pV->getParent();
++		}
++
++		menu->setFloater( pF );
++	}
+ 	// Adjust context menu to fit onscreen
+ 	LLRect mouse_rect;
+ 	const S32 MOUSE_CURSOR_PADDING = 5;
+@@ -4168,4 +4180,3 @@
+ {
+ 	return addContextChild(view, tab_group);
+ }
+-
+diff -r 23b2122ef9da indra/llui/llmenugl.h
+--- a/indra/llui/llmenugl.h	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llui/llmenugl.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -39,6 +39,8 @@
+ #include "llview.h"
+ #include <boost/function.hpp>
+ 
++#include "nd/ndmenu.h"
++
+ extern S32 MENU_BAR_HEIGHT;
+ extern S32 MENU_BAR_WIDTH;
+ 
+@@ -348,6 +350,7 @@
+ 
+ class LLMenuGL 
+ :	public LLUICtrl
++, public nd::ui::Menu // <FS:ND/> Let a menu be able to follow a floater outside the main wnd
+ {
+ public:
+ 	struct Params : public LLInitParam::Block<Params, LLUICtrl::Params>
+diff -r 23b2122ef9da indra/llui/llview.cpp
+--- a/indra/llui/llview.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llui/llview.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -57,6 +57,7 @@
+ #include "lltexteditor.h"
+ #include "lltextbox.h"
+ 
++#include "nd/nduiutils.h"
+ static const S32 LINE_HEIGHT = 15;
+ 
+ S32		LLView::sDepth = 0;
+@@ -810,6 +811,14 @@
+ 		S32 local_x = x - viewp->getRect().mLeft;
+ 		S32 local_y = y - viewp->getRect().mBottom;
+ 
++		if( nd::uiutils::isFreeFloater( viewp ) )
++		{
++			// <FS:ND> Todo, investigate
++			nd::uiutils::debugVisit( viewp );
++			local_x = x;
++			local_y = x;
++		}
++
+ 		if (!viewp->visibleEnabledAndContains(local_x, local_y))
+ 		{
+ 			continue;
+@@ -838,6 +847,15 @@
+ 	{
+ 		S32 local_x = x - viewp->getRect().mLeft;
+ 		S32 local_y = y - viewp->getRect().mBottom;
++
++		if( nd::uiutils::isFreeFloater( viewp ) )
++		{
++			// <FS:ND/> Todo, investigate
++			nd::uiutils::debugVisit( viewp );
++			local_x = x;
++			local_y = y;
++		}
++
+ 		// Differs from childrenHandleMouseEvent() in that we want to offer
+ 		// tooltips even for disabled widgets.
+ 		if(!viewp->visibleAndContains(local_x, local_y))
+@@ -870,6 +888,15 @@
+ 	{
+ 		S32 local_x = x - viewp->getRect().mLeft;
+ 		S32 local_y = y - viewp->getRect().mBottom;
++
++		if( nd::uiutils::isFreeFloater( viewp ) )
++		{
++			// <FS:ND> Todo, investigate
++			nd::uiutils::debugVisit( viewp );
++			local_x = x;
++			local_y = x;
++		}
++
+ 		if( !viewp->visibleEnabledAndContains(local_x, local_y))
+ 		{
+ 			continue;
+@@ -896,6 +923,15 @@
+ 	{
+ 		S32 local_x = x - viewp->getRect().mLeft;
+ 		S32 local_y = y - viewp->getRect().mBottom;
++
++		if( nd::uiutils::isFreeFloater( viewp ) )
++		{
++			// <FS:ND> Todo, investigate
++			nd::uiutils::debugVisit( viewp );
++			local_x = x;
++			local_y = x;
++		}
++
+ 		if(!viewp->visibleEnabledAndContains(local_x, local_y))
+ 		{
+ 			continue;
+@@ -924,6 +960,15 @@
+ 	{
+ 		S32 local_x = x - viewp->getRect().mLeft;
+ 		S32 local_y = y - viewp->getRect().mBottom;
++
++		if( nd::uiutils::isFreeFloater( viewp ) )
++		{
++			// <FS:ND> Todo, investigate
++			nd::uiutils::debugVisit( viewp );
++			local_x = x;
++			local_y = x;
++		}
++
+ 		if (!viewp->visibleAndContains(local_x, local_y))
+ 		{
+ 			continue;
+@@ -1374,6 +1419,9 @@
+ 		{
+ 			if (viewp != NULL)
+ 			{
++				if( nd::uiutils::isFreeFloater( viewp ) )
++					continue;
++
+ 				LLRect child_rect( viewp->mRect );
+ 
+ 				if (viewp->followsRight() && viewp->followsLeft())
+@@ -1442,6 +1490,12 @@
+ 
+ 	BOOST_FOREACH(LLView* childp, mChildList)
+ 	{
++		if( nd::uiutils::isFreeFloater( childp ) )
++		{
++			nd::uiutils::debugVisit( childp );
++			continue; // <FS:ND/> Todo, investigate
++		}
++
+ 		// ignore invisible and "top" children when calculating bounding rect
+ 		// such as combobox popups
+ 		if (!childp->getVisible() || childp == gFocusMgr.getTopCtrl()) 
+@@ -1660,6 +1714,10 @@
+ 	while( cur->mParentView )
+ 	{
+ 		cur = cur->mParentView;
++
++		if( nd::uiutils::isActiveWindow( cur ) && nd::uiutils::isFreeFloater( cur ) )
++			break;
++
+ 		*local_x -= cur->getRect().mLeft;
+ 		*local_y -= cur->getRect().mBottom;
+ 	}
+@@ -1674,8 +1732,13 @@
+ 	do
+ 	{
+ 		LLRect cur_rect = cur->getRect();
++
++		if( nd::uiutils::isActiveWindow( cur ) && nd::uiutils::isFreeFloater( cur ) )
++			break;
++
+ 		*screen_x += cur_rect.mLeft;
+ 		*screen_y += cur_rect.mBottom;
++
+ 		cur = cur->mParentView;
+ 	}
+ 	while( cur );
+@@ -1690,6 +1753,9 @@
+ 	while( cur->mParentView )
+ 	{
+ 		cur = cur->mParentView;
++		if( nd::uiutils::isActiveWindow( cur ) && nd::uiutils::isFreeFloater( cur ) )
++			break;
++
+ 		local->translate( -cur->getRect().mLeft, -cur->getRect().mBottom );
+ 	}
+ }
+@@ -1704,6 +1770,8 @@
+ 	{
+ 		cur = cur->mParentView;
+ 		screen->translate( cur->getRect().mLeft, cur->getRect().mBottom );
++		if( nd::uiutils::isActiveWindow( cur ) && nd::uiutils::isFreeFloater( cur ) )
++			break;
+ 	}
+ }
+ 
+diff -r 23b2122ef9da indra/llui/nd/ndfloater.cpp
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,119 @@
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "ndfloater.h"
++
++#include "ndfloater_darwin.h"
++#include "ndfloater_linux.h"
++#include "ndfloater_win32.h"
++
++#include "nduiutils.h"
++#include "../llui.h"
++
++namespace nd
++{
++	namespace ui
++	{
++		class FloaterImpl: public FloaterImplType {};
++
++		Floater::ContextSetter::ContextSetter( Floater *aFloater )
++			: mFloater( aFloater )
++			, mPopContext( false )
++		{
++			if( aFloater )
++				mPopContext = aFloater->pushContext();
++		}
++
++		Floater::ContextSetter::~ContextSetter()
++		{
++			if( mPopContext && mFloater )
++				mFloater->popContext();
++		}
++
++		Floater::Floater()
++		{
++			mImpl = new nd::ui::FloaterImpl();
++		}
++
++		Floater::~Floater()
++		{
++			destroyContext();
++			nd::uiutils::unregisterFloater(this);
++			delete mImpl;
++		}
++
++		bool Floater::pushContext()
++		{
++			if( mImpl->pushContext() )
++			{
++				LLUI::pushMatrix();
++				LLUI::loadIdentity();
++				return true;
++			}
++			return false;
++		}
++
++		void Floater:: popContext()
++		{
++			mImpl->popContext();
++			LLUI::popMatrix();
++		}
++
++		void Floater::createContext( S32 aX, S32 aY, S32 aWidth, S32 aHeight, LLWindow *aRootWindow )
++		{
++			nd::uiutils::unregisterFloater( this );
++			if( mImpl->createContext( aX, aY, aWidth, aHeight, aRootWindow ) )
++				nd::uiutils::registerFloater( this );
++		}
++
++		void Floater::createContext( )
++		{
++			if( !nd::uiutils::getGlobalRootWindow( ) )
++				return;
++
++			S32 x,y,w,h;
++			this->getRectForContext( x, y, w, h );
++			createContext( x, y, w, h, nd::uiutils::getGlobalRootWindow() );
++		}
++
++		void Floater::destroyContext()
++		{ mImpl->destroyContext(); }
++
++		void Floater::moveWindow( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++		{ mImpl->moveWindow( aX, aY, aWidth, aHeight ); }
++
++		void Floater::moveWindowGL( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++		{ mImpl->moveWindowGL( aX, aY, aWidth, aHeight ); }
++
++		void Floater::showWindow( bool aVisible )
++		{ mImpl->showWindow( aVisible ); }
++
++		void Floater::minimizeWindow( bool aMinimize )
++		{ mImpl->minimizeWindow( aMinimize ); }
++
++		void const* Floater::getPlatformWindow() const
++		{ return mImpl->getPlatformWindow(); }
++
++	}
++}
+diff -r 23b2122ef9da indra/llui/nd/ndfloater.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,82 @@
++#ifndef NDFLOATER_H
++#define NDFLOATER_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "stdtypes.h"
++
++class LLWindow;
++class LLView;
++class LLFloater;
++
++namespace nd
++{
++	namespace ui
++	{
++		class FloaterImpl;
++		class Floater
++		{
++			FloaterImpl *mImpl;
++		public:
++			class ContextSetter
++			{
++				Floater *mFloater;
++				bool mPopContext;
++			public:
++				ContextSetter( Floater *aFloater );
++				~ContextSetter();
++			};
++
++			friend class ContextSetter;
++
++			bool isFreeFloater() const
++			{ return 0 != getPlatformWindow(); }
++
++			void const* getPlatformWindow() const;
++
++			void preTearOff( bool aTearOff );
++			void postTearOff( bool aTearOff );
++
++			virtual void getRectForContext( S32 &aX, S32 &aY, S32 &aWidth, S32 &aHeight ) = 0; 
++		protected:
++			Floater();
++			virtual ~Floater();
++
++			void createContext( S32 aX, S32 aY, S32 aWidth, S32 aHeight, LLWindow *aRootWindow );
++			void createContext( );
++			void destroyContext();
++			void moveWindow( S32 aX, S32 aY, S32 aWidth, S32 aHeight );
++			void moveWindowGL( S32 aX, S32 aY, S32 aWidth, S32 aHeight );
++			void showWindow( bool aShow );
++			void minimizeWindow( bool aMinimize );
++
++		private:
++			bool pushContext();
++			void popContext();
++		};
++	}
++}
++
++#endif
+diff -r 23b2122ef9da indra/llui/nd/ndfloater_darwin.cpp
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater_darwin.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,100 @@
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "ndfloater_darwin.h"
++
++#ifdef LL_DARWIN
++#include "llrender.h"
++#include "llwindow.h"
++#include "../llui.h"
++#include "../llfloater.h"
++
++#include "nduiutils.h"
++
++namespace nd
++{
++	namespace ui
++	{
++		namespace darwin
++		{
++			struct FloaterData
++			{
++				FloaterData()
++				{
++				}
++			};
++
++			void const* Floater::getPlatformWindow() const
++			{
++				return 0;
++			}
++
++			Floater::Floater()
++				: mData(0)
++			{
++			}
++
++			Floater::~Floater()
++			{
++				destroyContext();
++			}
++
++			bool Floater::pushContext()
++			{
++				return false;
++			}
++
++			void Floater::popContext()
++			{
++			}
++
++			bool Floater::createContext( S32 aX, S32 aY, S32 aWidth, S32 aHeight, LLWindow *aMainWnd )
++			{
++				destroyContext();
++				return false;
++			}
++
++			void Floater::moveWindow( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++			{
++			}
++
++			void Floater::moveWindowGL( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++			{
++			}
++
++			void Floater::showWindow( bool aVisible )
++			{
++			}
++
++			void Floater::minimizeWindow( bool aMinimize )
++			{
++			}
++
++			void Floater::destroyContext()
++			{
++			}
++		}
++	}
++}
++#endif
+diff -r 23b2122ef9da indra/llui/nd/ndfloater_darwin.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater_darwin.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,71 @@
++#ifndef NDFLOATER_DARWIN_H
++#define NDFLOATER_DARWIN_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#ifdef LL_DARWIN
++#include "stdtypes.h"
++
++class LLWindow;
++class LLView;
++class LLFloater;
++
++namespace nd
++{
++	namespace ui
++	{
++		namespace darwin
++		{
++			struct FloaterData;
++
++			class Floater
++			{
++			public:
++				void const* getPlatformWindow() const;
++
++				Floater();
++				~Floater();
++				
++				bool pushContext();
++				void popContext();
++				
++				bool createContext( S32, S32, S32, S32, LLWindow* );
++				void destroyContext();
++				void moveWindow( S32, S32, S32, S32 );
++				void moveWindowGL( S32, S32, S32, S32 );
++				void showWindow( bool );
++				void minimizeWindow( bool aMinimize );
++				
++			private:
++				FloaterData *mData;
++			};
++		}
++
++		typedef nd::ui::darwin::Floater FloaterImplType;
++	}
++}
++
++#endif
++#endif
+diff -r 23b2122ef9da indra/llui/nd/ndfloater_linux.cpp
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater_linux.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,100 @@
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "ndfloater_linux.h"
++
++#ifdef LL_LINUX
++#include "llrender.h"
++#include "llwindow.h"
++#include "../llui.h"
++#include "../llfloater.h"
++
++#include "nduiutils.h"
++
++namespace nd
++{
++	namespace ui
++	{
++		namespace linux
++		{
++			struct FloaterData
++			{
++				FloaterData()
++				{
++				}
++			};
++
++			void const* Floater::getPlatformWindow() const
++			{
++				return 0;
++			}
++
++			Floater::Floater()
++				: mData(0)
++			{
++			}
++
++			Floater::~Floater()
++			{
++				destroyContext();
++			}
++
++			bool Floater::pushContext()
++			{
++				return false;
++			}
++
++			void Floater::popContext()
++			{
++			}
++
++			bool Floater::createContext( S32 aX, S32 aY, S32 aWidth, S32 aHeight, LLWindow *aMainWnd )
++			{
++				destroyContext();
++				return false;
++			}
++
++			void Floater::moveWindow( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++			{
++			}
++
++			void Floater::moveWindowGL( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++			{
++			}
++
++			void Floater::showWindow( bool aVisible )
++			{
++			}
++
++			void Floater::minimizeWindow( bool aMinimize )
++			{
++			}
++
++			void Floater::destroyContext()
++			{
++			}
++		}
++	}
++}
++#endif
+diff -r 23b2122ef9da indra/llui/nd/ndfloater_linux.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater_linux.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,71 @@
++#ifndef NDFLOATER_LINUX_H
++#define NDFLOATER_LINUX_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#ifdef LL_LINUX
++#include "stdtypes.h"
++
++class LLWindow;
++class LLView;
++class LLFloater;
++
++namespace nd
++{
++	namespace ui
++	{
++		namespace linux
++		{
++			struct FloaterData;
++
++			class Floater
++			{
++			public:
++				void const* getPlatformWindow() const;
++
++				Floater();
++				~Floater();
++				
++				bool pushContext();
++				void popContext();
++				
++				void createContext( S32, S32, S32, S32, LLWindow* );
++				void destroyContext();
++				void moveWindow( S32, S32, S32, S32 );
++				void moveWindowGL( S32, S32, S32, S32 );
++				void showWindow( bool );
++				void minimizeWindow( bool aMinimize );
++
++			private:
++				FloaterData *mData;
++			};
++		}
++
++		typedef nd::ui::linux::Floater FloaterImplType;
++	}
++}
++
++#endif
++#endif
+diff -r 23b2122ef9da indra/llui/nd/ndfloater_win32.cpp
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater_win32.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,202 @@
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "ndfloater_win32.h"
++
++#ifdef LL_WINDOWS
++#include "llrender.h"
++#include "llwindow.h"
++#include "../llfloater.h"
++
++#include "nduiutils.h"
++
++namespace nd
++{
++	namespace ui
++	{
++		namespace windows
++		{
++			struct FloaterData
++			{
++				FloaterData()
++				{
++					mHwnd = 0;
++					mHDC = 0;
++					mOldDC = 0;
++					mGLSizeY = ::GetSystemMetrics(SM_CYFULLSCREEN);
++					mGLSizeY = ::GetSystemMetrics(SM_CYMAXIMIZED);
++					//				mGLSizeY = ::GetSystemMetrics(SM_CYSCREEN);
++					// GetMonitorInfo/ SystemParametersInfo( SPI_GETWORKAREA ... );
++				}
++
++				S32 mGLSizeY;;
++
++				HWND mHwnd;
++				HDC mHDC;
++			
++				HDC mOldDC;
++			};
++
++			void const* Floater::getPlatformWindow() const
++			{
++				if( mData )
++					return mData->mHwnd;
++
++				return 0;
++			}
++
++			Floater::Floater()
++				: mData(0)
++			{
++			}
++
++			Floater::~Floater()
++			{
++				destroyContext();
++			}
++
++			bool Floater::pushContext()
++			{
++				if( !mData || !::wglGetCurrentContext() )
++					return false;
++
++				if( mData->mOldDC )
++					return false;
++
++				gGL.flush();
++				mData->mOldDC = ::wglGetCurrentDC();
++
++				// <FS:ND> Todo; Make sure we're not sharing VAO's between different context.
++				if( ::wglMakeCurrent( mData->mHDC, ::wglGetCurrentContext() ) )
++					return true;
++
++				mData->mOldDC = 0;
++				return false;
++			}
++
++			void Floater::popContext()
++			{
++				if( !mData || !mData->mOldDC  )
++					return;
++
++				gGL.flush();
++				::SwapBuffers( mData->mHDC );
++
++				::wglMakeCurrent( mData->mOldDC, ::wglGetCurrentContext() );
++				mData->mOldDC = 0;
++			}
++
++			bool Floater::createContext( S32 aX, S32 aY, S32 aWidth, S32 aHeight, LLWindow *aMainWnd )
++			{
++				destroyContext();
++
++				std::vector< wchar_t > vClassname;
++				int nCopied(32);
++
++				do
++				{
++					vClassname.resize( nCopied * 2 );
++					nCopied = ::GetClassName( (HWND)aMainWnd->getPlatformWindow(), &vClassname[0], vClassname.size() );
++				} while( nCopied > 0 && nCopied == vClassname.size() );
++			
++				if( !nCopied )
++				{
++					LL_WARNS( "Floater" ) << "Cannot query classname" << LL_ENDL;
++					return false;
++				}
++
++				mData = new FloaterData();
++				mData->mHwnd = ::CreateWindowW( &vClassname[0], L"", WS_POPUP|WS_BORDER|WS_CLIPCHILDREN|WS_CLIPCHILDREN, aX, aY, aWidth+1, aHeight+1, (HWND)aMainWnd->getPlatformWindow(), 0, ::GetModuleHandle(0), 0 );
++
++				if( !mData->mHwnd )
++				{
++					DWORD dwErr = ::GetLastError();
++					LL_WARNS( "Floater" ) << dwErr << LL_ENDL;
++					destroyContext();
++					return false;
++				}
++
++				mData->mHDC = ::GetDC( mData->mHwnd );
++
++				PIXELFORMATDESCRIPTOR pfd = {0};
++				HDC hCurDC = ::wglGetCurrentDC();
++				int nFmt = ::GetPixelFormat( hCurDC );
++				::DescribePixelFormat( hCurDC, nFmt, sizeof( PIXELFORMATDESCRIPTOR ), &pfd );
++
++				if (!::SetPixelFormat( mData->mHDC, nFmt, &pfd) )
++				{
++					destroyContext();
++					return false;
++				}
++
++				::SetWindowLong( mData->mHwnd, GWL_USERDATA, (U32)aMainWnd);
++				return true;
++			}
++
++			void Floater::moveWindow( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++			{
++				if( !mData || !mData->mHwnd )
++					return;
++
++				::MoveWindow( mData->mHwnd, aX, aY, aWidth, aHeight, FALSE );
++			}
++
++			void Floater::moveWindowGL( S32 aX, S32 aY, S32 aWidth, S32 aHeight )
++			{
++				if( !mData || !mData->mHwnd )
++					return;
++				moveWindow( aX, mData->mGLSizeY - aY, aWidth, aHeight );
++			}
++
++			void Floater::showWindow( bool aVisible )
++			{
++				if( !mData )
++					return;
++
++				if( aVisible )
++					::ShowWindow( mData->mHwnd, SW_SHOW );
++				else
++					::ShowWindow( mData->mHwnd, SW_HIDE );
++			}
++
++			void Floater::minimizeWindow( bool aMinimize )
++			{
++			}
++
++			void Floater::destroyContext()
++			{
++				if( mData )
++				{
++					if( mData->mHDC )
++						::ReleaseDC( mData->mHwnd, mData->mHDC );
++					if( mData->mHwnd )
++						::DestroyWindow( mData->mHwnd );
++				}
++				delete mData;
++				mData = 0;
++			}
++		}
++	}
++}
++#endif
+diff -r 23b2122ef9da indra/llui/nd/ndfloater_win32.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndfloater_win32.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,71 @@
++#ifndef NDFLOATER_WIN32_H
++#define NDFLOATER_WIN32_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#ifdef LL_WINDOWS
++#include "stdtypes.h"
++
++class LLWindow;
++class LLView;
++class LLFloater;
++
++namespace nd
++{
++	namespace ui
++	{
++		namespace windows
++		{
++			struct FloaterData;
++
++			class Floater
++			{
++			public:
++				void const* getPlatformWindow() const;
++
++				Floater();
++				~Floater();
++				
++				bool pushContext();
++				void popContext();
++				
++				bool createContext( S32, S32, S32, S32, LLWindow* );
++				void destroyContext();
++				void moveWindow( S32, S32, S32, S32 );
++				void moveWindowGL( S32, S32, S32, S32 );
++				void showWindow( bool );
++				void minimizeWindow( bool aMinimize );
++				
++			private:
++				FloaterData *mData;
++			};
++		}
++
++		typedef nd::ui::windows::Floater FloaterImplType;
++	}
++}
++
++#endif
++#endif
+diff -r 23b2122ef9da indra/llui/nd/ndmenu.cpp
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndmenu.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,91 @@
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "ndmenu.h"
++#include "ndfloater.h"
++#include "nduiutils.h"
++#include "llpreprocessor.h"
++#include "../llview.h"
++
++namespace nd
++{
++	namespace ui
++	{
++		struct State
++		{
++			State()
++			{
++				mFloater = 0;
++				mCTX = 0;
++			}
++
++			Floater *mFloater;
++			nd::ui::Floater::ContextSetter *mCTX;
++		};
++
++		Menu::Menu()
++		{
++			mState = new State();
++		}
++		Menu::~Menu()
++		{
++			delete mState;
++		}
++
++		void Menu::preDraw()
++		{
++			if( !mState || !mState->mFloater )
++				return;
++
++			LLView *pView = dynamic_cast< LLView* >( mState->mFloater );
++			while( pView && !mState->mCTX )
++			{
++			 	nd::ui::Floater *pFloater = dynamic_cast< nd::ui::Floater* >( pView );
++			 	if( pFloater && pFloater->isFreeFloater() )
++			 		mState->mCTX = new nd::ui::Floater::ContextSetter( pFloater );
++
++			 	pView = pView->getParent();
++			}
++		}
++
++		void Menu::postDraw()
++		{
++			if( mState )
++			{
++				delete mState->mCTX;;
++				mState->mCTX = 0;
++			}
++		}
++
++		void Menu::setFloater( Floater *aFloater )
++		{
++			mState->mFloater = aFloater;
++		}
++
++		Floater* Menu::getFloater()
++		{
++			return mState->mFloater;
++		}
++	}
++}
+diff -r 23b2122ef9da indra/llui/nd/ndmenu.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/ndmenu.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,53 @@
++#ifndef NDMENU_H
++#define NDMENU_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "stdtypes.h"
++
++namespace nd
++{
++	namespace ui
++	{
++		struct State;
++		class Floater;
++
++		class Menu
++		{
++			State *mState;
++		public:
++			Menu();
++			virtual ~Menu();
++
++			void preDraw();
++			void postDraw();
++
++			void setFloater( Floater* );
++			Floater* getFloater();
++		};
++	}
++}
++
++#endif
+diff -r 23b2122ef9da indra/llui/nd/nduiutils.cpp
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/nduiutils.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,146 @@
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include "ndfloater.h"
++
++#include <map>
++
++#include "../llui.h"
++#include "../llfloater.h"
++
++#include "nduiutils.h"
++
++namespace nd
++{
++	namespace uiutils
++	{
++		LLWindow *s_GlobalRoot(0);
++		void setGlobalRootWindow( LLWindow *aGlobalRoot )
++		{
++			s_GlobalRoot = aGlobalRoot;
++		}
++		LLWindow* getGlobalRootWindow( )
++		{
++			return s_GlobalRoot;
++		}
++
++		void debugVisit( LLFloater const *aFloater )
++		{
++			if( !aFloater )
++				return;
++
++//			if( aFloater->getName() == "floater_about" )
++//				llinfos << aFloater->getName() << " rect: " << aFloater->getRect() << " bounding rect: " << aFloater->getBoundingRect() << llendl;
++		}
++
++		void debugVisit( LLView const *aView )
++		{
++			nd::uiutils::debugVisit( dynamic_cast< LLFloater const* >( aView ) );
++		}
++
++		bool isFreeFloater( LLFloater const *aFloater )
++		{
++			if( !aFloater )
++				return false;
++
++			return aFloater->isFreeFloater();
++		}
++
++		bool isFreeFloater( LLView const *aView )
++		{
++			return nd::uiutils::isFreeFloater( dynamic_cast< LLFloater const* >( aView ) );
++		}
++
++		std::map< void const*, nd::ui::Floater* > sMpFloater;
++		nd::ui::Floater* findFloater( void const* aUniqueId )
++		{
++			std::map< void const*, nd::ui::Floater* >::iterator itr = sMpFloater.find( aUniqueId );
++			if( sMpFloater.end() != itr )
++				return itr->second;
++
++			return 0;
++		}
++
++		void registerFloater( nd::ui::Floater *aFloater )
++		{
++			if( aFloater && aFloater->getPlatformWindow() )
++			{
++				unregisterFloater( aFloater );
++				sMpFloater[ aFloater->getPlatformWindow() ] = aFloater;
++			}
++		}
++
++		void unregisterFloater( nd::ui::Floater *aFloater )
++		{
++			if( aFloater && aFloater->getPlatformWindow() )
++				sMpFloater.erase( aFloater->getPlatformWindow() );
++		}
++
++		nd::ui::Floater const* sActiveWindow;
++		
++		bool isActiveWindow( LLView const *aView )
++		{
++			return sActiveWindow && sActiveWindow == dynamic_cast< nd::ui::Floater const* >( aView );
++		}
++
++		nd::ui::Floater const* setActiveWindow(nd::ui::Floater const *aActive)
++		{
++			std::swap( sActiveWindow, aActive );
++			return aActive;
++		}
++
++		ActiveWindowSwitcher::ActiveWindowSwitcher( nd::ui::Floater const *aActive )
++		{
++			mNeedsReset = false;
++			if( aActive && aActive->isFreeFloater() )
++			{
++				mOld = setActiveWindow( aActive );
++				mNeedsReset = true;
++			}
++		}
++		
++		ActiveWindowSwitcher::ActiveWindowSwitcher( LLView const *aView )
++		{
++			mNeedsReset = false;
++			
++			while( !mNeedsReset && aView )
++			{
++				nd::ui::Floater const *pFloater = dynamic_cast< nd::ui::Floater const *>( aView );
++				if( pFloater && pFloater->isFreeFloater() )
++				{
++					mOld = setActiveWindow( pFloater );
++					mNeedsReset = true;
++				}
++				aView = aView->getParent();
++			}
++		}
++
++
++		ActiveWindowSwitcher::~ActiveWindowSwitcher()
++		{
++			if( mNeedsReset )
++				setActiveWindow( mOld);
++		}
++	}
++}
+diff -r 23b2122ef9da indra/llui/nd/nduiutils.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llui/nd/nduiutils.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,65 @@
++#ifndef NDUIUTILS_H
++#define NDUIUTILS_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2014, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++class LLView;
++class LLFloater;
++
++#include "ndfloater.h"
++
++namespace nd
++{
++	namespace uiutils
++	{
++		void setGlobalRootWindow( LLWindow* );
++		LLWindow* getGlobalRootWindow( );
++
++		void debugVisit( LLFloater const* );
++		void debugVisit( LLView const* );
++		
++		bool isFreeFloater( LLFloater const* );
++		bool isFreeFloater( LLView const* );
++
++		nd::ui::Floater* findFloater( void const* aUniqueId );
++		void registerFloater( nd::ui::Floater* );
++		void unregisterFloater( nd::ui::Floater* );
++
++		bool isActiveWindow( LLView const* );
++
++		class ActiveWindowSwitcher
++		{
++			nd::ui::Floater const *mOld;
++			bool mNeedsReset;
++
++		public:
++			ActiveWindowSwitcher( nd::ui::Floater const *aActive );
++			ActiveWindowSwitcher( LLView const * );
++			~ActiveWindowSwitcher();
++		};
++	}
++}
++
++#endif
+diff -r 23b2122ef9da indra/llwindow/CMakeLists.txt
+--- a/indra/llwindow/CMakeLists.txt	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llwindow/CMakeLists.txt	Thu Mar 27 21:17:07 2014 +0100
+@@ -54,6 +54,18 @@
+     llwindowcallbacks.h
+     )
+ 
++# <FS:ND> Add all nd* files.
++
++FILE( GLOB llwindow_ND_SOURCE_FILES nd/nd*.cpp )
++FILE( GLOB llwindow_ND_HEADER_FILES nd/nd*.h )
++
++SOURCE_GROUP( nd FILES ${llwindow_ND_SOURCE_FILES} ${llwindow_ND_HEADER_FILES} )
++
++list(APPEND llwindow_SOURCE_FILES  ${llwindow_ND_SOURCE_FILES} )
++list(APPEND llwindow_HEADER_FILES ${llwindow_ND_HEADER_FILES} )
++
++# </FS:ND>
++
+ set(viewer_SOURCE_FILES
+     llmousehandler.cpp
+     )
+diff -r 23b2122ef9da indra/llwindow/llwindowwin32.cpp
+--- a/indra/llwindow/llwindowwin32.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/llwindow/llwindowwin32.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -59,6 +59,8 @@
+ #include <dinput.h>
+ #include <Dbt.h.>
+ 
++#include "nd/ndhwndswitcher.h"
++
+ // culled from winuser.h
+ #ifndef WM_MOUSEWHEEL /* Added to be compatible with later SDK's */
+ const S32	WM_MOUSEWHEEL = 0x020A;
+@@ -1850,6 +1852,8 @@
+ 
+ 	if (NULL != window_imp)
+ 	{
++		nd::win32::HWNDSwitcher wndSwitch(&window_imp->mWindowHandle,h_wnd);
++
+ 		window_imp->mCallbacks->handleResumeWatchdog(window_imp);
+ 		window_imp->mCallbacks->handlePingWatchdog(window_imp, "Main:StartWndProc");
+ 		// Has user provided their own window callback?
+@@ -1905,7 +1909,8 @@
+ 
+ 		case WM_PAINT:
+ 			window_imp->mCallbacks->handlePingWatchdog(window_imp, "Main:WM_PAINT");
+-			GetUpdateRect(window_imp->mWindowHandle, &update_rect, FALSE);
++//			GetUpdateRect(window_imp->mWindowHandle, &update_rect, FALSE);
++			GetUpdateRect( h_wnd, &update_rect, FALSE);
+ 			update_width = update_rect.right - update_rect.left + 1;
+ 			update_height = update_rect.bottom - update_rect.top + 1;
+ 			window_imp->mCallbacks->handlePaint(window_imp, update_rect.left, update_rect.top,
+@@ -2445,8 +2450,8 @@
+ 				// NOTE: mouse_coord is in *window* coordinates for scroll events
+ 				POINT mouse_coord = {(S32)(S16)LOWORD(l_param), (S32)(S16)HIWORD(l_param)};
+ 
+-				if (ScreenToClient(window_imp->mWindowHandle, &mouse_coord)
+-					&& GetClientRect(window_imp->mWindowHandle, &client_rect))
++				if (ScreenToClient(h_wnd, &mouse_coord)
++					&& GetClientRect(h_wnd, &client_rect))
+ 				{
+ 					// we have a valid mouse point and client rect
+ 					if (mouse_coord.x < client_rect.left || client_rect.right < mouse_coord.x
+@@ -2508,6 +2513,9 @@
+ 
+ 		case WM_SIZE:
+ 			{
++				if( wndSwitch.getOriginalValue() != h_wnd )
++					return DefWindowProc(h_wnd, u_msg, w_param, l_param);
++
+ 				window_imp->mCallbacks->handlePingWatchdog(window_imp, "Main:WM_SIZE");
+ 				S32 width = S32( LOWORD(l_param) );
+ 				S32 height = S32( HIWORD(l_param) );
+@@ -2592,8 +2600,18 @@
+ 				window_imp->mCallbacks->handleDataCopy(window_imp, myCDS->dwData, myCDS->lpData);
+ 			};
+ 			return 0;			
+-
+ 			break;
++		case WM_NCHITTEST:
++			if( wndSwitch.getOriginalValue() != h_wnd )
++			{
++				RECT wndRect;
++				::GetWindowRect( h_wnd, &wndRect );
++				if( window_coord.mX >= wndRect.left+20 && window_coord.mX <= wndRect.right - 55 )
++				{
++					if( window_coord.mY >= wndRect.top - 2 && window_coord.mY <= wndRect.top + 20 )
++						return HTCAPTION;
++				}
++			}
+ 		}
+ 
+ 	window_imp->mCallbacks->handlePauseWatchdog(window_imp);	
+diff -r 23b2122ef9da indra/llwindow/nd/ndhwndswitcher.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llwindow/nd/ndhwndswitcher.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,37 @@
++#ifndef NDHWNDSWITCHER_H
++#define NDHWNDSWITCHER_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2013, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++#include <nd/ndboolswitch.h>
++namespace nd
++{
++	namespace win32
++	{
++		typedef nd::utils::varSwitch< HWND > HWNDSwitcher;
++	}
++}
++
++#endif
+diff -r 23b2122ef9da indra/llwindow/nd/ndviewerwindow.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/indra/llwindow/nd/ndviewerwindow.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -0,0 +1,58 @@
++#ifndef NDVIEWERWINDOW_H
++#define NDVIEWERWINDOW_H
++
++/**
++ * $LicenseInfo:firstyear=2013&license=fsviewerlgpl$
++ * Phoenix Firestorm Viewer Source Code
++ * Copyright (C) 2013, Nicky Dasmijn
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation;
++ * version 2.1 of the License only.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * The Phoenix Firestorm Project, Inc., 1831 Oakwood Drive, Fairmont, Minnesota 56031-3225 USA
++ * http://www.firestormviewer.org
++ * $/LicenseInfo$
++ */
++
++namespace nd
++{
++	namespace ui
++	{
++		class ViewerWindow
++		{
++			void const* mLastOSWnd;
++			void const* mMainOSWnd;
++		public:
++			ViewerWindow()
++			{
++				mLastOSWnd = 0;
++				mMainOSWnd = 0;
++			}
++
++			void setMainOSWnd( void const* aWnd )
++			{ mMainOSWnd = aWnd; }
++
++			void const* getMainOSWnd() const
++			{ return mMainOSWnd; }
++
++			void setLastOSWnd( void const* aWnd )
++			{ mLastOSWnd = aWnd; }
++
++			void const* getLasOSWnd() const
++			{ return mLastOSWnd; }
++		};
++	}
++}
++
++#endif
+diff -r 23b2122ef9da indra/newview/fsfloaterim.cpp
+--- a/indra/newview/fsfloaterim.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/fsfloaterim.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -77,6 +77,8 @@
+ #include "fscommon.h"
+ #include "fsfloaternearbychat.h"
+ 
++#include "nd/nduiutils.h"
++
+ const F32 ME_TYPING_TIMEOUT = 4.0f;
+ const F32 OTHER_TYPING_TIMEOUT = 9.0f;
+ 
+@@ -1894,3 +1896,8 @@
+ {
+ 	return FSFloaterIM::sIMFloaterShowedSignal.connect(cb);
+ }
++
++void FSFloaterIM::setTornOff( bool aTearOff )
++{
++	LLFloater::setTornOff( aTearOff );
++}
+\ No newline at end of file
+diff -r 23b2122ef9da indra/newview/fsfloaterim.h
+--- a/indra/newview/fsfloaterim.h	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/fsfloaterim.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -241,6 +241,9 @@
+ 	S32 mFloaterHeight;
+ 	
+ 	boost::signals2::connection mAvatarNameCacheConnection;
++
++public:
++	virtual void    setTornOff(bool torn_off);
+ };
+ 
+ 
+diff -r 23b2122ef9da indra/newview/fsfloaterimcontainer.cpp
+--- a/indra/newview/fsfloaterimcontainer.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/fsfloaterimcontainer.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -42,6 +42,7 @@
+ #include "llviewercontrol.h"
+ #include "fsfloaterim.h"
+ #include "llvoiceclient.h"
++#include "llviewerwindow.h"
+ 
+ static const F32 VOICE_STATUS_UPDATE_INTERVAL = 1.0f;
+ 
+@@ -59,6 +60,7 @@
+ 
+ 	// Firstly add our self to IMSession observers, so we catch session events
+ 	LLIMMgr::getInstance()->addSessionObserver(this);
++	nd::ui::Floater::createContext( getRect().mLeft, getRect().mTop, getRect().mRight-getRect().mLeft, getRect().mBottom-getRect().mTop, gViewerWindow->getWindow() );
+ }
+ 
+ FSFloaterIMContainer::~FSFloaterIMContainer()
+diff -r 23b2122ef9da indra/newview/llfloaterabout.cpp
+--- a/indra/newview/llfloaterabout.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/llfloaterabout.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -75,6 +75,7 @@
+ #include "rlvhandler.h"
+ // [/RLVa:KB]
+ 
++#include "llviewerwindow.h"
+ 
+ extern LLMemoryInfo gSysMemory;
+ extern U32 gPacketsIn;
+@@ -128,7 +129,7 @@
+ LLFloaterAbout::LLFloaterAbout(const LLSD& key) 
+ :	LLFloater(key)
+ {
+-	
++	nd::ui::Floater::createContext( getRect().mLeft, getRect().mTop, getRect().mRight-getRect().mLeft, getRect().mBottom-getRect().mTop, gViewerWindow->getWindow() );
+ }
+ 
+ // Destroys the object
+diff -r 23b2122ef9da indra/newview/llfloaterimcontainer.cpp
+--- a/indra/newview/llfloaterimcontainer.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/llfloaterimcontainer.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -58,6 +58,8 @@
+ #include "llviewerobjectlist.h"
+ #include "boost/foreach.hpp"
+ 
++#include "llviewerwindow.h"
++
+ //
+ // LLFloaterIMContainer
+ //
+@@ -84,6 +86,7 @@
+ 
+ 	mAutoResize = FALSE;
+ 	LLTransientFloaterMgr::getInstance()->addControlView(LLTransientFloaterMgr::IM, this);
++	nd::ui::Floater::createContext( getRect().mLeft, getRect().mTop, getRect().mRight-getRect().mLeft, getRect().mBottom-getRect().mTop, gViewerWindow->getWindow() );
+ }
+ 
+ LLFloaterIMContainer::~LLFloaterIMContainer()
+diff -r 23b2122ef9da indra/newview/llfloatersidepanelcontainer.cpp
+--- a/indra/newview/llfloatersidepanelcontainer.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/llfloatersidepanelcontainer.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -36,6 +36,8 @@
+ #include "llpaneloutfitedit.h"
+ #include "llsidepanelappearance.h"
+ 
++#include "llviewerwindow.h"
++
+ //static
+ const std::string LLFloaterSidePanelContainer::sMainPanelName("main_panel");
+ 
+@@ -49,6 +51,7 @@
+ 	// Prevent transient floaters (e.g. IM windows) from hiding
+ 	// when this floater is clicked.
+ 	LLTransientFloaterMgr::getInstance()->addControlView(LLTransientFloaterMgr::GLOBAL, this);
++	nd::ui::Floater::createContext( getRect().mLeft, getRect().mTop, getRect().mRight-getRect().mLeft, getRect().mBottom-getRect().mTop, gViewerWindow->getWindow() );
+ }
+ 
+ LLFloaterSidePanelContainer::~LLFloaterSidePanelContainer()
+diff -r 23b2122ef9da indra/newview/llfloatertools.cpp
+--- a/indra/newview/llfloatertools.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/llfloatertools.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -93,6 +93,8 @@
+ 
+ #include "llviewernetwork.h" // <FS:CR> Aurora Sim
+ 
++#include "llviewerwindow.h"
++
+ // Globals
+ LLFloaterTools *gFloaterTools = NULL;
+ bool LLFloaterTools::sShowObjectCost = true;
+@@ -462,6 +464,8 @@
+ 
+ 	mLandImpactsObserver = new LLLandImpactsObserver();
+ 	LLViewerParcelMgr::getInstance()->addObserver(mLandImpactsObserver);
++
++	nd::ui::Floater::createContext( getRect().mLeft, getRect().mTop, getRect().mRight-getRect().mLeft, getRect().mBottom-getRect().mTop, gViewerWindow->getWindow() );
+ }
+ 
+ LLFloaterTools::~LLFloaterTools()
+diff -r 23b2122ef9da indra/newview/llviewerwindow.cpp
+--- a/indra/newview/llviewerwindow.cpp	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/llviewerwindow.cpp	Thu Mar 27 21:17:07 2014 +0100
+@@ -233,6 +233,8 @@
+ 
+ #include "llleapmotioncontroller.h"
+ 
++#include "nd/nduiutils.h"
++
+ //
+ // Globals
+ //
+@@ -959,6 +961,9 @@
+ 	x = llround((F32)x / mDisplayScale.mV[VX]);
+ 	y = llround((F32)y / mDisplayScale.mV[VY]);
+ 
++	nd::uiutils::ActiveWindowSwitcher activeWindowSwitch( nd::uiutils::findFloater( window->getPlatformWindow() ) );
++	nd::ui::ViewerWindow::setLastOSWnd( window->getPlatformWindow() );
++
+ 	// only send mouse clicks to UI if UI is visible
+ 	if(gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI))
+ 	{	
+@@ -1043,6 +1048,14 @@
+ 			return r;
+ 		}
+ 
++		nd::ui::Floater *pWnd = nd::uiutils::findFloater( (void*)window->getPlatformWindow() );
++		LLView *pView = dynamic_cast< LLView* >( pWnd );
++		if( pView )
++		{
++			if( pView->handleAnyMouseClick( x, y, mask, clicktype, down ) )
++				return TRUE;
++		}
++
+ 		// Mark the click as handled and return if we aren't within the root view to avoid spurious bugs
+ 		if( !mRootView->pointInView(x, y) )
+ 		{
+@@ -1322,6 +1335,7 @@
+ // WARNING: this is potentially called multiple times per frame
+ void LLViewerWindow::handleMouseMove(LLWindow *window,  LLCoordGL pos, MASK mask)
+ {
++	nd::ui::ViewerWindow::setLastOSWnd( window->getPlatformWindow() );
+ 	S32 x = pos.mX;
+ 	S32 y = pos.mY;
+ 
+@@ -1352,6 +1366,7 @@
+ 
+ void LLViewerWindow::handleMouseLeave(LLWindow *window)
+ {
++	nd::ui::ViewerWindow::setLastOSWnd( window->getPlatformWindow() );
+ 	// Note: we won't get this if we have captured the mouse.
+ 	llassert( gFocusMgr.getMouseCapture() == NULL );
+ 	mMouseInWindow = FALSE;
+@@ -1381,6 +1396,7 @@
+ // The top-level window has gained focus (e.g. via ALT-TAB)
+ void LLViewerWindow::handleFocus(LLWindow *window)
+ {
++	nd::ui::ViewerWindow::setLastOSWnd( window->getPlatformWindow() );
+ 	gFocusMgr.setAppHasFocus(TRUE);
+ 	LLModalDialog::onAppFocusGained();
+ 
+@@ -1401,6 +1417,7 @@
+ // The top-level window has lost focus (e.g. via ALT-TAB)
+ void LLViewerWindow::handleFocusLost(LLWindow *window)
+ {
++	nd::ui::ViewerWindow::setLastOSWnd( window->getPlatformWindow() );
+ 	gFocusMgr.setAppHasFocus(FALSE);
+ 	//LLModalDialog::onAppFocusLost();
+ 	LLToolMgr::getInstance()->onAppFocusLost();
+@@ -1470,6 +1487,7 @@
+ 
+ BOOL LLViewerWindow::handleActivate(LLWindow *window, BOOL activated)
+ {
++	nd::ui::ViewerWindow::setLastOSWnd( window->getPlatformWindow() );
+ 	if (activated)
+ 	{
+ 		mActive = true;
+@@ -1724,6 +1742,9 @@
+ 		p.ignore_pixel_depth,
+ 		gSavedSettings.getBOOL("RenderDeferred") ? 0 : gSavedSettings.getU32("RenderFSAASamples")); //don't use window level anti-aliasing if FBOs are enabled
+ 
++	if( mWindow )
++		nd::ui::ViewerWindow::setMainOSWnd( mWindow->getPlatformWindow() );
++
+ 	if (!LLViewerShaderMgr::sInitialized)
+ 	{ //immediately initialize shaders
+ 		LLViewerShaderMgr::sInitialized = TRUE;
+@@ -3337,6 +3358,15 @@
+ 
+ 	// constraint mouse enter events to children of mouse captor
+ 	LLView* root_view = captor_view;
++	LLView *pActiveWnd(0);
++
++	if( !root_view && nd::ui::ViewerWindow::getLasOSWnd() != nd::ui::ViewerWindow::getMainOSWnd() && nd::ui::ViewerWindow::getLasOSWnd() )
++	{
++		root_view = dynamic_cast<LLView*>( nd::uiutils::findFloater( nd::ui::ViewerWindow::getLasOSWnd() ) );
++		pActiveWnd = root_view;
++	}
++
++	nd::uiutils::ActiveWindowSwitcher activeWnd( nd::uiutils::findFloater( nd::ui::ViewerWindow::getLasOSWnd() ) );
+ 
+ 	// if mouse captor doesn't exist or isn't a LLView
+ 	// then allow mouse enter events on entire UI hierarchy
+@@ -3410,7 +3440,7 @@
+ 				}
+ 			}
+ 		}
+-		else
++		else if( !nd::uiutils::isActiveWindow(root_view)  )
+ 		{
+ 			// walk UI tree in depth-first order
+ 			for (LLView::tree_iterator_t it = root_view->beginTreeDFS();
+@@ -3420,7 +3450,7 @@
+ 				LLView* viewp = *it;
+ 				// calculating the screen rect involves traversing the parent, so this is less than optimal
+ 				if (viewp->getVisible()
+-					&& viewp->calcScreenBoundingRect().pointInRect(x, y))
++					&& (viewp->calcScreenBoundingRect().pointInRect(x, y) ) )
+ 				{
+ 
+ 					// if this view is mouse opaque, nothing behind it should be in mouse_hover_set
+@@ -3440,6 +3470,25 @@
+ 				}
+ 			}
+ 		}
++		else
++		{
++			// walk UI tree in depth-first order
++			for (LLView::tree_iterator_t it = root_view->beginTreeDFS(); it != root_view->endTreeDFS();	++it)
++			{
++				LLView* viewp = *it;
++
++				if (viewp->getVisible()	&& (viewp->calcScreenRect().pointInRect(x, y) ) )
++				{
++					// if this view is mouse opaque, nothing behind it should be in mouse_hover_set
++					if (viewp->getMouseOpaque())
++						it = viewp->beginTreeDFS();
++		
++					mouse_hover_set.insert(viewp->getHandle());
++				}
++				else
++					it.skipDescendants();
++			}
++		}
+ 	}
+ 
+ 	typedef std::vector<LLHandle<LLView> > view_handle_list_t;
+@@ -3490,6 +3539,8 @@
+ 			// Pass hover events to object capturing mouse events.
+ 			S32 local_x;
+ 			S32 local_y; 
++			nd::uiutils::ActiveWindowSwitcher activeWindowSwitch( dynamic_cast<LLView*>( mouse_captor ) );
++
+ 			mouse_captor->screenPointToLocal( x, y, &local_x, &local_y );
+ 			handled = mouse_captor->handleHover(local_x, local_y, mask);
+ 			if (LLView::sDebugMouseHandling)
+@@ -3524,6 +3575,15 @@
+ 					}
+ 					handled = TRUE;
+ 				}
++				else if( pActiveWnd && pActiveWnd->handleHover( x, y, mask ) )
++				{
++					if (LLView::sDebugMouseHandling && LLView::sMouseHandlerMessage != last_handle_msg)
++					{
++						last_handle_msg = LLView::sMouseHandlerMessage;
++						llinfos << "Hover" << LLView::sMouseHandlerMessage << llendl;
++					}
++					handled = TRUE;
++				}
+ 				else if (LLView::sDebugMouseHandling)
+ 				{
+ 					if (last_handle_msg != LLStringUtil::null)
+diff -r 23b2122ef9da indra/newview/llviewerwindow.h
+--- a/indra/newview/llviewerwindow.h	Sun Mar 09 19:58:15 2014 -0400
++++ b/indra/newview/llviewerwindow.h	Thu Mar 27 21:17:07 2014 +0100
+@@ -50,6 +50,8 @@
+ #include <boost/signals2.hpp>
+ #include <boost/scoped_ptr.hpp>
+ 
++#include "nd/ndviewerwindow.h"
++
+ class LLStat;
+ class LLView;
+ class LLViewerObject;
+@@ -141,7 +143,7 @@
+ 
+ static const U32 MAX_SNAPSHOT_IMAGE_SIZE = 6 * 1024; // max snapshot image size 6144 * 6144
+ 
+-class LLViewerWindow : public LLWindowCallbacks
++class LLViewerWindow : public LLWindowCallbacks, public nd::ui::ViewerWindow
+ {
+ public:
+ 	//
